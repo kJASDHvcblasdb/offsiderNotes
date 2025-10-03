@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ rig_id | default('Rig') }} Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    /* Light safety styles in case style.css misses anything */
+    .container{max-width:1200px;margin:0 auto;padding:1rem;}
+    .grid{display:grid;gap:1rem;}
+    .grid-3{grid-template-columns:repeat(3,minmax(0,1fr));}
+    .grid-2{grid-template-columns:repeat(2,minmax(0,1fr));}
+    .card{border:1px solid #e3e3e3;border-radius:8px;background:#fff;overflow:hidden}
+    .card h3{margin:0 0 .5rem 0}
+    .card .card-body{padding:1rem}
+    .table{width:100%;border-collapse:collapse}
+    .table th,.table td{padding:.5rem;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
+    .muted{color:#777}
+    .topbar{display:flex;justify-content:space-between;align-items:center;padding:.75rem 1rem;border-bottom:1px solid #eee;background:#fafafa}
+    .brand a{text-decoration:none;color:inherit;font-weight:700}
+    .nav a{margin-left:.75rem;text-decoration:none}
+    .btn{display:inline-block;padding:.5rem .75rem;border:1px solid #ccc;border-radius:6px;text-decoration:none}
+    .btn.primary{background:#0b5fff;border-color:#0b5fff;color:#fff}
+    .btn.small{padding:.25rem .5rem;font-size:.875rem}
+    .section-title{display:flex;justify-content:space-between;align-items:center;margin:.25rem 0 0 0}
+    .pill{display:inline-block;padding:.15rem .45rem;border-radius:999px;font-size:.8rem;border:1px solid #ddd}
+    .danger{color:#b00020}
+    .success{color:#0a7d16}
+    .warning{color:#9a6b00}
+    .list-unstyled{list-style:none;padding-left:0;margin:0}
+    .mb{margin-bottom:1rem}
+    .mb-sm{margin-bottom:.5rem}
+    .mt{margin-top:1rem}
+    .nowrap{white-space:nowrap}
+    .ellipsis{max-width:380px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    @media (max-width: 900px){ .grid-3{grid-template-columns:1fr} .grid-2{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><a href="/">Offsider Notes</a></div>
+  <nav class="nav">
+    <a href="/rigs">Rigs</a>
+    <a href="/r/{{ rig_id }}/audit">Audit</a>
+  </nav>
+</header>
+
+<main class="container">
+  <!-- Heading -->
+  <div class="mb">
+    <h1 class="mb-sm">{{ rig_id | default('Rig') }} Dashboard</h1>
+    {% if rig_name or rig_quote %}
+      <div class="muted">
+        {% if rig_name %}<span class="pill">{{ rig_name }}</span>{% endif %}
+        {% if rig_quote %}<span style="margin-left:.5rem" class="muted">“{{ rig_quote }}”</span>{% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Quick links -->
+  <section class="card mb">
+    <div class="card-body">
+      <div class="section-title">
+        <h3>Quick actions</h3>
+      </div>
+      <div class="mb-sm">
+        <a class="btn primary" href="/r/{{ rig_id }}/stock/new">Add stock item</a>
+        <a class="btn" href="/r/{{ rig_id }}/restock">Restock list</a>
+        <a class="btn" href="/r/{{ rig_id }}/faults/new">Report fault</a>
+        <a class="btn" href="/r/{{ rig_id }}/bits">Bits</a>
+        <a class="btn" href="/r/{{ rig_id }}/equipment">Equipment</a>
+        <a class="btn" href="/r/{{ rig_id }}/usage">Usage</a>
+        <a class="btn" href="/r/{{ rig_id }}/refuel">Refuel</a>
+        <a class="btn" href="/r/{{ rig_id }}/handover">Handover</a>
+        <a class="btn" href="/r/{{ rig_id }}/travel">Travel</a>
+      </div>
+      {% if quick_links %}
+        <div class="mb-sm">
+          {% for link in quick_links %}
+            <a class="btn small" href="{{ link.href | default('#') }}">{{ link.label | default('Link') }}</a>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <!-- Three columns: Priority stock, Recent restocks, Faults -->
+  <section class="grid grid-3">
+    <!-- Priority stock -->
+    <div class="card">
+      <div class="card-body">
+        <div class="section-title">
+          <h3>Priority stock</h3>
+          <a class="btn small" href="/r/{{ rig_id }}/stock">View all</a>
+        </div>
+        {% set items = low_stock or [] %}
+        {% if items|length == 0 %}
+          <p class="muted">Nothing critical right now.</p>
+        {% else %}
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th class="nowrap">On Rig</th>
+                <th class="nowrap">Min + Buffer</th>
+                <th class="nowrap">Unit</th>
+                <th class="nowrap">Location</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in items %}
+                <tr>
+                  <td class="ellipsis">{{ s.name or '—' }}</td>
+                  <td class="nowrap danger">{{ s.on_rig_qty if s.on_rig_qty is not none else '—' }}</td>
+                  <td class="nowrap">{{ (s.min_qty or 0) + (s.buffer_qty or 0) }}</td>
+                  <td class="nowrap">{{ s.unit or '—' }}</td>
+                  <td class="ellipsis">{{ s.location or '—' }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Recent restocks -->
+    <div class="card">
+      <div class="card-body">
+        <div class="section-title">
+          <h3>Recent restocks</h3>
+          <a class="btn small" href="/r/{{ rig_id }}/restock">Open list</a>
+        </div>
+        {% set rs = recent_restocks or [] %}
+        {% if rs|length == 0 %}
+          <p class="muted">No recent restock items.</p>
+        {% else %}
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th class="nowrap">Qty</th>
+                <th class="nowrap">Unit</th>
+                <th class="nowrap">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in rs %}
+                <tr>
+                  <td class="ellipsis">{{ r.name or '—' }}</td>
+                  <td class="nowrap">{{ r.qty if r.qty is not none else '—' }}</td>
+                  <td class="nowrap">{{ r.unit or '—' }}</td>
+                  <td class="nowrap">
+                    {% set st = (r.status or '') | string %}
+                    {% if 'done' in st|lower %}<span class="success">{{ st }}</span>
+                    {% elif 'wait' in st|lower or 'pend' in st|lower %}<span class="warning">{{ st }}</span>
+                    {% else %}{{ st or '—' }}{% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Faults -->
+    <div class="card">
+      <div class="card-body">
+        <div class="section-title">
+          <h3>Faults</h3>
+          <a class="btn small" href="/r/{{ rig_id }}/faults">All faults</a>
+        </div>
+        {% set fl = recent_faults or [] %}
+        {% if fl|length == 0 %}
+          <p class="muted">No current faults.</p>
+        {% else %}
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Equipment</th>
+                <th>Issue</th>
+                <th class="nowrap">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for f in fl %}
+                <tr>
+                  <td class="ellipsis">
+                    {{ f.equipment_name or f.equipment or f.name or '—' }}
+                  </td>
+                  <td class="ellipsis">
+                    {{ f.description or f.issue or '—' }}
+                  </td>
+                  <td class="nowrap">
+                    {% set st = (f.status or '') | string %}
+                    {% if 'open' in st|lower or 'new' in st|lower %}<span class="danger">{{ st }}</span>
+                    {% elif 'closed' in st|lower or 'fixed' in st|lower %}<span class="success">{{ st }}</span>
+                    {% else %}{{ st or '—' }}{% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  <!-- Activity Log -->
+  <section class="card mt">
+    <div class="card-body">
+      <div class="section-title">
+        <h3>Activity</h3>
+        <a class="btn small" href="/r/{{ rig_id }}/audit">Open audit</a>
+      </div>
+      {% set logs = recent_logs or [] %}
+      {% if logs|length == 0 %}
+        <p class="muted">No recent activity.</p>
+      {% else %}
+        <table class="table">
+          <thead>
+            <tr>
+              <th class="nowrap">When</th>
+              <th>Actor</th>
+              <th>Action</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in logs %}
+              {# Support either dict-like rows or pre-rendered HTML strings #}
+              {% if row is string %}
+                <tr><td colspan="4">{{ row | safe }}</td></tr>
+              {% else %}
+                <tr>
+                  <td class="nowrap">
+                    {% if row.created_at %}{{ row.created_at }}{% else %}<span class="muted">—</span>{% endif %}
+                  </td>
+                  <td>{{ row.actor or '—' }}</td>
+                  <td>{{ row.action or '—' }}</td>
+                  <td>
+                    {% if row.details_html %}
+                      {{ row.details_html | safe }}
+                    {% else %}
+                      {{ row.details or '—' }}
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </div>
+  </section>
+</main>
+</body>
+</html>

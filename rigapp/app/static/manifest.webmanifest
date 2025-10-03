@@ -1,0 +1,11 @@
+{
+  "name": "Offsider Tools",
+  "short_name": "Offsider",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#111111",
+  "description": "Rig App offline-first UI.",
+  "icons": []
+}

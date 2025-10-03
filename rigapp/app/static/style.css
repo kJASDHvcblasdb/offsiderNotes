@@ -1,0 +1,73 @@
+/* Tree view */
+ul.tree { list-style: none; padding-left: 1rem; margin: .25rem 0; border-left: 2px solid #eee; }
+ul.tree > li { margin: .2rem 0 .4rem; }
+.node-name { font-weight: 600; }
+.small { font-size: .85rem; }
+
+:root { color-scheme: light; }
+html, body { margin:0; padding:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#fff; color:#111; }
+.container { max-width: 1080px; margin: 0 auto; padding: 1rem; }
+h1, h2, h3 { margin: .25rem 0 .5rem 0; }
+.muted { color: #666; }
+.danger { color: #b00020; }
+.cards { display:grid; gap: .75rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.card { display:block; padding: .8rem 1rem; border: 1px solid #e3e3e3; border-radius: 10px; background:#fff; text-decoration:none; color:inherit; }
+.card strong { display:block; margin-bottom:.25rem; }
+.actions { margin: .75rem 0; display:flex; gap:.5rem; flex-wrap:wrap; }
+.btn { display:inline-block; padding:.45rem .7rem; border:1px solid #ccc; border-radius:8px; background:#f7f7f7; text-decoration:none; color:#111; cursor:pointer; }
+.btn:hover { background:#f0f0f0; }
+table { width:100%; border-collapse: collapse; }
+th, td { padding:.5rem .4rem; border-bottom:1px solid #eee; text-align:left; vertical-align:top; }
+.form label { display:block; margin:.5rem 0; }
+.form input, .form select, .form textarea { width:100%; padding:.45rem .5rem; border:1px solid #ccc; border-radius:6px; }
+.noprint { }
+.footer { margin-top: 1.5rem; padding-top: .75rem; border-top: 1px solid #eee; display:flex; gap:.5rem; flex-wrap:wrap; }
+
+@media print { .noprint { display:none; } }
+
+/* Badges / chips for status + priority */
+.badge {
+  display:inline-block; font-size:.85rem; padding:.15rem .5rem; border-radius:999px; border:1px solid #ddd; background:#f7f7f7;
+}
+.badge-open { background: #fff7e6; border-color:#ffe3b3; color:#7a4c00; }
+.badge-attention { background:#ffeaea; border-color:#ffc8c8; color:#7a0000; }
+.badge-fixed { background:#e7f8ed; border-color:#c8efda; color:#135a2e; }
+.badge-critical { background:#ffe5e5; border-color:#ffb3b3; color:#7a0000; }
+
+/* Chips */
+.chip { display:inline-block; font-size:.8rem; padding:.1rem .45rem; border-radius:6px; border:1px solid #ddd; }
+.chip-high { background:#ffeaea; border-color:#ffc8c8; color:#7a0000; }
+.chip-med { background:#fff7e6; border-color:#ffe3b3; color:#7a4c00; }
+.chip-low { background:#edf7ff; border-color:#cfe9ff; color:#0b4a7a; }
+.chip-crit { background:#ffe5e5; border-color:#ffb3b3; color:#7a0000; }
+
+/* Stock rows */
+.row-critical { background:#fff1f1; }
+.row-critical td { border-bottom-color:#ffd6d6; font-weight:500; }
+.row-attention { background:#fff8eb; }
+.row-attention td { border-bottom-color:#ffe3b3; }
+
+/* Compact button group for quick +/- adjust */
+.btn-sm { padding:.25rem .5rem; font-size:.9rem; border-radius:6px; }
+.btn-group-inline { display:inline-flex; gap:.25rem; margin-right:.25rem; flex-wrap:wrap; }
+
+/* Inline select + bulk bar + row checkbox */
+.inline-select { min-width: 220px; }
+.bulk-bar { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
+.row-select { width: 1.1rem; height: 1.1rem; }
+
+/* Offline banner */
+.offline-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  padding: .5rem .75rem;
+  background: #fff3cd;
+  border: 1px solid #ffe08a;
+  color: #7a4c00;
+  border-radius: 8px;
+  margin-bottom: .75rem;
+}
+
+/* optional: smoother toast fade */
+#toast-host .toast { transition: opacity .25s; }
