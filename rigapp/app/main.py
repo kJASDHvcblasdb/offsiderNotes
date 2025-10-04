@@ -6,7 +6,12 @@ import asyncio
 from contextlib import suppress
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
@@ -24,6 +29,7 @@ from .models import (
     JobTask,
     LocationNode,
 )
+
 from .auth import (
     router as auth_router,
     current_actor,
@@ -31,6 +37,7 @@ from .auth import (
     current_rig_title,
 )
 
+# Feature routers
 from .routers.stock import router as stock_router
 from .routers.restock import router as restock_router
 from .routers.bits import router as bits_router
@@ -46,16 +53,33 @@ from .routers.map import router as map_router
 
 from .audit import recent_logs
 from . import scheduler
-from .ui import wrap_page
+
 
 app = FastAPI(title="Rig App", version="0.1")
 
-# ---- Static ------------------------------------------------------------------
-app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+# ---- Static / CSS ------------------------------------------------------------
+
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).parent / "static"),
+    name="static",
+)
+
 
 class AutoCSSMiddleware(BaseHTTPMiddleware):
+    """
+    Injects viewport meta + /static/style.css into any HTML-like response.
+    Skips PWA endpoints so they're served verbatim.
+    """
+
     async def dispatch(self, request, call_next):
+        path = request.url.path or ""
+        if path in ("/sw.js", "/manifest.webmanifest", "/offline"):
+            return await call_next(request)
+
         resp = await call_next(request)
+
+        # Pull body from buffered responses (HTMLResponse/Response)
         body_bytes = None
         try:
             if hasattr(resp, "body"):
@@ -66,9 +90,11 @@ class AutoCSSMiddleware(BaseHTTPMiddleware):
                     body_bytes = b.encode(getattr(resp, "charset", "utf-8"), "ignore")
         except Exception:
             body_bytes = None
-        if body_bytes is None:
-            return resp
 
+        if body_bytes is None:
+            return resp  # can't safely modify
+
+        # Determine if it's HTML or looks like it
         ctype = (resp.headers.get("content-type") or "").lower()
         looks_html = False
         try:
@@ -76,9 +102,11 @@ class AutoCSSMiddleware(BaseHTTPMiddleware):
             looks_html = ("<html" in probe) or ("<body" in probe)
         except Exception:
             pass
+
         if ("text/html" not in ctype) and not looks_html:
             return resp
 
+        # Decode full body
         try:
             charset = getattr(resp, "charset", "utf-8")
             text = body_bytes.decode(charset, "ignore")
@@ -126,9 +154,11 @@ class AutoCSSMiddleware(BaseHTTPMiddleware):
 
         return HTMLResponse(text, status_code=resp.status_code, headers=dict(resp.headers))
 
+
 app.add_middleware(AutoCSSMiddleware)
 
-# ---- Startup -----------------------------------------------------------------
+# ---- Startup / Scheduler -----------------------------------------------------
+
 @app.on_event("startup")
 def _startup_init_db():
     ensure_db_initialized_with_seed()
@@ -145,7 +175,126 @@ async def _stop_bg_tasks():
         with suppress(asyncio.CancelledError):
             await task
 
+# ---- PWA endpoints -----------------------------------------------------------
+
+@app.get("/sw.js")
+def service_worker() -> Response:
+    """
+    Service worker — network-first for HTML navigations (prevents stale /map after POST).
+    Cache-first for static GET assets. POST/PUT/DELETE bypass.
+    """
+    sw_js = r"""
+// Rig App Service Worker
+const CACHE_NAME = 'rigapp-v4';
+const CORE = [
+  '/', '/offline',
+  '/static/style.css',
+  '/manifest.webmanifest',
+  '/stock', '/jobs', '/map', '/restock', '/bits', '/equipment', '/handover'
+];
+
+self.addEventListener('install', (evt) => {
+  evt.waitUntil(
+    caches.open(CACHE_NAME).then(cache => cache.addAll(CORE)).then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', (evt) => {
+  evt.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.map(k => (k !== CACHE_NAME ? caches.delete(k) : Promise.resolve())))
+    ).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (evt) => {
+  const req = evt.request;
+  const url = new URL(req.url);
+
+  // Only same-origin GET handled
+  if (req.method !== 'GET' || url.origin !== self.location.origin) return;
+
+  if (url.pathname === '/sw.js' || url.pathname === '/manifest.webmanifest') return;
+
+  const isHTML = req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html');
+
+  if (isHTML) {
+    // Network-first for navigations
+    evt.respondWith(
+      fetch(req).then(resp => {
+        if (resp && resp.status === 200) {
+          const clone = resp.clone();
+          caches.open(CACHE_NAME).then(c => c.put(req, clone));
+        }
+        return resp;
+      }).catch(async () => {
+        const cached = await caches.match(req);
+        if (cached) return cached;
+        return caches.match('/offline');
+      })
+    );
+    return;
+  }
+
+  // Cache-first for static assets / non-HTML GET
+  evt.respondWith(
+    caches.match(req).then(cached => {
+      if (cached) return cached;
+      return fetch(req).then(resp => {
+        if (resp && resp.status === 200 && resp.type === 'basic') {
+          const clone = resp.clone();
+          caches.open(CACHE_NAME).then(c => c.put(req, clone));
+        }
+        return resp;
+      }).catch(() => new Response('', { status: 504, statusText: 'Offline' }));
+    })
+  );
+});
+"""
+    resp = Response(content=sw_js, media_type="application/javascript")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
+
+@app.get("/manifest.webmanifest")
+def manifest_webmanifest() -> Response:
+    import json
+    manifest = {
+        "name": "Rig App",
+        "short_name": "RigApp",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#ffffff",
+        "theme_color": "#ffffff",
+        "scope": "/"
+    }
+    body = json.dumps(manifest, separators=(",", ":"))
+    resp = Response(content=body, media_type="application/manifest+json")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.get("/offline", response_class=HTMLResponse)
+def offline_page():
+    html = """
+<!doctype html>
+<html><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="/static/style.css">
+  <title>Offline – Rig App</title>
+</head>
+<body class="container">
+  <h1>Offline</h1>
+  <p class="muted">You’re offline. Any cached pages will still load. Forms will submit once you’re back online.</p>
+  <p><a class="btn" href="/">Back to Dashboard</a></p>
+</body></html>
+    """
+    return HTMLResponse(html)
+
 # ---- Routers -----------------------------------------------------------------
+
 app.include_router(auth_router)
 app.include_router(stock_router)
 app.include_router(restock_router)
@@ -161,6 +310,7 @@ app.include_router(jobs_router)
 app.include_router(map_router)
 
 # ---- Health / Debug ----------------------------------------------------------
+
 @app.get("/health")
 def health() -> JSONResponse:
     return JSONResponse({"status": "ok"})
@@ -195,7 +345,8 @@ def debug_db_check(db=Depends(get_db)):
     except Exception as e:
         return {"ok": False, "error": repr(e)}
 
-# ---- Dashboard helpers -------------------------------------------------------
+# ---- Locations tree preview helpers -----------------------------------------
+
 def _nodes_by_parent(nodes: list[LocationNode]) -> dict[int | None, list[LocationNode]]:
     buckets: dict[int | None, list[LocationNode]] = {}
     for n in nodes:
@@ -223,11 +374,10 @@ def _render_tree_preview(nodes: list[LocationNode], max_nodes: int = 24) -> str:
         return f"<ul class='tree'>{''.join(items)}</ul>"
     html = walk(None)
     if shown >= max_nodes:
-        html += "<p class='muted' style='margin:.25rem 0 0;'>…truncated — see full <a href='/map'>Locations</a></p>"
+        html += "<p class='muted' style='margin:.25rem 0 0;'>…truncated for preview — see full <a href='/map'>Locations</a></p>"
     return html
 
 # ---- Root / Dashboard --------------------------------------------------------
-from sqlalchemy import select as sa_select  # to avoid shadowing
 
 @app.get("/", response_class=HTMLResponse)
 def root(
@@ -240,39 +390,75 @@ def root(
         return RedirectResponse("/auth/select", status_code=303)
 
     try:
-        stocks = db.scalars(sa_select(StockItem)).all()
-        low_crit = sum(1 for s in stocks if (s.on_rig_qty or 0) < (s.min_qty or 0) or (s.on_rig_qty or 0) < (s.buffer_qty or 0))
-        open_restock = db.scalars(sa_select(RestockItem).where(RestockItem.is_closed == False)).all()  # noqa: E712
-        bits_attention = db.scalars(sa_select(Bit).where(Bit.status.in_([BitStatus.NEEDS_RESHARPEN, BitStatus.VERY_USED]))).all()
-        open_faults = db.scalars(sa_select(EquipmentFault).where(EquipmentFault.is_resolved == False)).all()  # noqa: E712
-        open_handover_hi = db.scalars(sa_select(HandoverNote).where(HandoverNote.is_closed == False, HandoverNote.priority.in_([0,1]))).all()  # noqa: E712
-        open_tasks_hi = db.scalars(sa_select(JobTask).where(JobTask.is_closed == False, JobTask.priority.in_([0,1]))).all()  # noqa: E712
-        loc_nodes = db.scalars(sa_select(LocationNode)).all()
+        stocks = db.scalars(select(StockItem)).all()
+        low_crit = 0
+        for s in stocks:
+            q = s.on_rig_qty or 0
+            if q < (s.min_qty or 0) or q < (s.buffer_qty or 0):
+                low_crit += 1
+
+        open_restock = db.scalars(
+            select(RestockItem).where(RestockItem.is_closed == False)  # noqa: E712
+        ).all()
+        bits_attention = db.scalars(
+            select(Bit).where(Bit.status.in_([BitStatus.NEEDS_RESHARPEN, BitStatus.VERY_USED]))
+        ).all()
+        open_faults = db.scalars(
+            select(EquipmentFault).where(EquipmentFault.is_resolved == False)  # noqa: E712
+        ).all()
+
+        open_handover_hi = db.scalars(
+            select(HandoverNote).where(HandoverNote.is_closed == False, HandoverNote.priority.in_([0, 1]))  # noqa: E712
+        ).all()
+        open_tasks_hi = db.scalars(
+            select(JobTask).where(JobTask.is_closed == False, JobTask.priority.in_([0, 1]))  # noqa: E712
+        ).all()
+
+        loc_nodes = db.scalars(select(LocationNode)).all()
         locations_preview_html = _render_tree_preview(loc_nodes, max_nodes=24)
 
-        critical_jobs_count = low_crit + len(open_restock) + len(open_faults) + len(bits_attention) + len(open_handover_hi) + len(open_tasks_hi)
+        critical_jobs_count = (
+            low_crit
+            + len(open_restock)
+            + len(open_faults)
+            + len(bits_attention)
+            + len(open_handover_hi)
+            + len(open_tasks_hi)
+        )
     except OperationalError as e:
         msg = (
             "<html><head><link rel='stylesheet' href='/static/style.css'></head>"
             "<body class='container'>"
             "<h1>Database not initialized</h1>"
-            "<p class='muted'>Tables are missing.</p>"
+            "<p class='muted'>Tables are missing. "
+            "Click the button below to initialize and seed the database, then reload.</p>"
             "<form method='post' action='/admin/init'><button type='submit'>Initialize DB</button></form>"
             f"<pre style='margin-top:1rem;'>{str(e)}</pre>"
             "</body></html>"
         )
         return HTMLResponse(msg, status_code=500)
 
-    attention_cards = [
-        "<a class='card' href='/stock' style='border-left:6px solid #8b0000;'><strong>Low/Critical stock</strong><span class='muted'><br>"
-        f"{low_crit} items</span></a>",
-        "<a class='card' href='/restock' style='border-left:6px solid #1f6feb;'><strong>Restock orders</strong><span class='muted'><br>"
-        f"{len(open_restock)} entries</span></a>",
-        "<a class='card' href='/jobs' style='border-left:6px solid #f9844a;'><strong>Critical jobs</strong><span class='muted'><br>"
-        f"{critical_jobs_count} items</span></a>",
-        "<a class='card' href='/equipment' style='border-left:6px solid #e0a800;'><strong>Open equipment faults</strong><span class='muted'><br>"
-        f"{len(open_faults)} open</span></a>",
-    ]
+    attention_cards = []
+    attention_cards.append(
+        "<a class='card' href='/stock' style='border-left:6px solid #8b0000;'>"
+        "<strong>Low/Critical stock</strong><br><span class='muted'>"
+        f"{low_crit} items</span></a>"
+    )
+    attention_cards.append(
+        "<a class='card' href='/restock' style='border-left:6px solid #1f6feb;'>"
+        "<strong>Restock orders</strong><br><span class='muted'>"
+        f"{len(open_restock)} entries</span></a>"
+    )
+    attention_cards.append(
+        "<a class='card' href='/jobs' style='border-left:6px solid #f9844a;'>"
+        "<strong>Critical jobs</strong><br><span class='muted'>"
+        f"{critical_jobs_count} items</span></a>"
+    )
+    attention_cards.append(
+        "<a class='card' href='/equipment' style='border-left:6px solid #e0a800;'>"
+        "<strong>Open equipment faults</strong><br><span class='muted'>"
+        f"{len(open_faults)} open</span></a>"
+    )
 
     quick_cards = """
       <div class="cards">
@@ -287,7 +473,7 @@ def root(
       </div>
     """
 
-    sections_grid = f"""
+    sections_grid = """
       <div class="cards">
         <a class="card" href="/jobs"><strong>📋 Jobs</strong><br><span class="muted">Critical & tasks</span></a>
         <a class="card" href="/stock"><strong>📦 Stock</strong><br><span class="muted">On-rig, min/buffer, priorities</span></a>
@@ -299,7 +485,8 @@ def root(
         <a class="card" href="/travel"><strong>🚚 Travel</strong><br><span class="muted">Location/time log</span></a>
         <a class="card" href="/refuel"><strong>⛽ Refuel</strong><br><span class="muted">Before/after & reminders</span></a>
         <a class="card" href="/audit"><strong>📜 Audit</strong><br><span class="muted">Full change history</span></a>
-        <a class="card" href="/offline"><strong>📴 Offline (PWA)</strong><br><span class="muted">Install / pre-cache</span></a>
+        <a class="card" href="/offline"><strong>🛰️ Offline</strong><br><span class="muted">Open offline page</span></a>
+        <a class="card" href="/search"><strong>🔎 Global Search</strong><br><span class="muted">Find across sections</span></a>
       </div>
     """
 
@@ -331,6 +518,12 @@ def root(
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <link rel="stylesheet" href="/static/style.css">
+        <link rel="manifest" href="/manifest.webmanifest">
+        <script>
+          if ('serviceWorker' in navigator) {{
+            navigator.serviceWorker.register('/sw.js').catch(()=>{{}});
+          }}
+        </script>
         <title>{title}</title>
       </head>
       <body class="container">
